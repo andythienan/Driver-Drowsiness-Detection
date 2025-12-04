@@ -1,3 +1,4 @@
+import time
 import warnings
 from collections import deque
 from typing import Deque, Optional
@@ -114,8 +115,8 @@ class DrowsinessVideoProcessor(VideoProcessorBase):
         self.current_label: Optional[int] = None
         self.current_confidence: Optional[float] = None
 
-        # Internal alarm flag (visual only here; audio not used in web app)
-        self.alarm_sounding = False
+        # Track alarm state for audio alert
+        self.should_play_alarm = False
 
     def recv(self, frame: av.VideoFrame) -> av.VideoFrame:
         # Get image in BGR format and flip horizontally (mirror effect)
@@ -173,12 +174,11 @@ class DrowsinessVideoProcessor(VideoProcessorBase):
                 if not is_fatigued:
                     status_text = f"ACTIVE ({confidence:.1f}%)"
                     status_color = (0, 255, 0)  # Green
-                    self.alarm_sounding = False
+                    self.should_play_alarm = False
                 else:
                     status_text = f"FATIGUE ({confidence:.1f}%)"
                     status_color = (0, 0, 255)  # Red
-                    # In a browser environment we avoid OS-level beeps
-                    self.alarm_sounding = True
+                    self.should_play_alarm = True
 
             except Exception:
                 status_text = "LOI TRICH XUAT"
@@ -255,6 +255,12 @@ def main():
         help="Nếu xác suất mô hình > ngưỡng này và nhãn là FATIGUE thì coi là buồn ngủ.",
     )
 
+    enable_sound = st.sidebar.checkbox(
+        "🔊 Bật cảnh báo âm thanh",
+        value=True,
+        help="Phát âm thanh cảnh báo khi phát hiện buồn ngủ.",
+    )
+
     st.sidebar.markdown("---")
     st.sidebar.markdown("**Trạng thái hiện tại** sẽ được hiển thị trên video.")
 
@@ -316,7 +322,7 @@ def main():
                     "MAR (Mouth Aspect Ratio)", f"{processor.current_mar:.3f}"
                 )
 
-            # Status text
+            # Status text and sound alert
             if processor.current_label is not None and processor.current_confidence is not None:
                 if processor.current_label == 0:
                     status_placeholder.markdown(
@@ -328,6 +334,40 @@ def main():
                         "<span style='color:red; font-size:24px; font-weight:bold;'>⚠️ DROWSY!</span>",
                         unsafe_allow_html=True,
                     )
+                    
+                    # Play alert sound if enabled and drowsiness detected
+                    if enable_sound and processor.should_play_alarm:
+                        # Track last alarm time to avoid spam
+                        if "last_alarm_time" not in st.session_state:
+                            st.session_state.last_alarm_time = 0
+                        
+                        current_time = time.time()
+                        # Play sound every 2 seconds max to avoid spam
+                        if current_time - st.session_state.last_alarm_time > 2.0:
+                            st.session_state.last_alarm_time = current_time
+                            # Generate beep sound using JavaScript
+                            beep_js = """
+                            <script>
+                            (function() {
+                                const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+                                const oscillator = audioContext.createOscillator();
+                                const gainNode = audioContext.createGain();
+                                
+                                oscillator.connect(gainNode);
+                                gainNode.connect(audioContext.destination);
+                                
+                                oscillator.frequency.value = 800; // Hz
+                                oscillator.type = 'sine';
+                                
+                                gainNode.gain.setValueAtTime(0.3, audioContext.currentTime);
+                                gainNode.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + 0.5);
+                                
+                                oscillator.start(audioContext.currentTime);
+                                oscillator.stop(audioContext.currentTime + 0.5);
+                            })();
+                            </script>
+                            """
+                            st.components.v1.html(beep_js, height=0)
 
             # Real-time EAR chart (optional)
             if len(st.session_state["ear_history"]) > 1:
