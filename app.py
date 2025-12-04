@@ -3,11 +3,11 @@ from collections import deque
 from typing import Deque, Optional
 
 import av
-import cv2
 import joblib
 import mediapipe as mp
 import numpy as np
 import streamlit as st
+from PIL import Image, ImageDraw
 from streamlit_webrtc import WebRtcMode, VideoProcessorBase, webrtc_streamer
 
 
@@ -118,10 +118,12 @@ class DrowsinessVideoProcessor(VideoProcessorBase):
         self.alarm_sounding = False
 
     def recv(self, frame: av.VideoFrame) -> av.VideoFrame:
-        image = frame.to_ndarray(format="bgr24")
-        image = cv2.flip(image, 1)
+        # Get image in BGR format and flip horizontally (mirror effect)
+        image_bgr = frame.to_ndarray(format="bgr24")
+        image_bgr = np.ascontiguousarray(image_bgr[:, ::-1, :])
 
-        rgb_frame = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+        # Convert to RGB for MediaPipe
+        rgb_frame = image_bgr[:, :, ::-1]
         results = self.face_mesh.process(rgb_frame)
 
         status_text = "KHONG PHAT HIEN KHUON MAT"
@@ -182,19 +184,20 @@ class DrowsinessVideoProcessor(VideoProcessorBase):
                 status_text = "LOI TRICH XUAT"
                 status_color = (0, 0, 255)
 
-        # Overlay text on frame
-        cv2.putText(
-            image,
-            status_text,
-            (50, 50),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            1,
-            status_color,
-            2,
-            cv2.LINE_AA,
-        )
+        # Overlay status text using Pillow on RGB image
+        overlay_rgb = rgb_frame.copy()
+        pil_img = Image.fromarray(overlay_rgb)
+        draw = ImageDraw.Draw(pil_img)
 
-        return av.VideoFrame.from_ndarray(image, format="bgr24")
+        # Convert BGR color to RGB for Pillow
+        text_color_rgb = (status_color[2], status_color[1], status_color[0])
+        draw.text((50, 50), status_text, fill=text_color_rgb)
+
+        overlay_rgb = np.array(pil_img)
+        # Convert back to BGR for WebRTC output
+        output_bgr = overlay_rgb[:, :, ::-1]
+
+        return av.VideoFrame.from_ndarray(output_bgr, format="bgr24")
 
     def update_params(self, smoothing_window: int, fatigue_prob_threshold: float):
         """
